@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from heapq import heappop, heappush
+from itertools import product
 from typing import Optional
 
 line_re = re.compile(
@@ -28,7 +29,7 @@ class ClosedValveInfo:
 
 @dataclass(slots=True)
 class Node:
-    valve: Valve
+    valves: tuple[Valve, Valve]
     remaining_time: int
     open_valves: tuple
     closed_valves: dict[int, int]
@@ -36,11 +37,11 @@ class Node:
     previous: Optional["Node"] = None
 
     def get_id(self):
-        return (self.valve.id, self.remaining_time, self.open_valves)
+        return ((self.valves[0].id, self.valves[1].id), self.remaining_time, self.open_valves)
 
-    def make_next_move(self, valve: Valve):
+    def make_next_move(self, valves: tuple[Valve, Valve]):
         return Node(
-            valve,
+            valves,
             remaining_time=self.remaining_time - 1,
             pressure=self.pressure,
             open_valves=self.open_valves,
@@ -48,16 +49,23 @@ class Node:
             previous=self,
         )
 
-    def make_next_open(self):
+    def make_next_open(self, valves: list[Valve]):
         next_remaining_time = self.remaining_time - 1
         closed_valves = self.closed_valves.copy()
-        del closed_valves[self.valve.id]
+        ids = set()
+        next_pressure = self.pressure
+        for valve in valves:
+            if valve.id in ids:
+                continue
+            ids.add(valve.id)
+            next_pressure += valve.flow * next_remaining_time
+            del closed_valves[valve.id]
         return Node(
-            self.valve,
+            self.valves,
             remaining_time=next_remaining_time,
-            pressure=self.pressure + self.valve.flow * next_remaining_time,
+            pressure=next_pressure,
             open_valves=tuple(
-                (next_remaining_time if i == self.valve.id else self.open_valves[i])
+                (next_remaining_time if i in ids else self.open_valves[i])
                 for i in range(len(self.open_valves))
             ),
             closed_valves=closed_valves,
@@ -75,9 +83,12 @@ class Node:
         return sum
 
     def explore_neighbors(self):
-        yield from (self.make_next_move(n) for n in self.valve.neighbors)
-        if self.open_valves[self.valve.id] is None and self.valve.flow > 0:
-            yield self.make_next_open()
+        neighbors_pairs = product(self.valves[0].neighbors, self.valves[1].neighbors)
+        yield from (self.make_next_move(n) for n in neighbors_pairs)
+        valve_hum, valve_el = self.valves
+        for valves in ([valve_hum], [valve_el], [valve_hum, valve_el]):
+            if all(self.open_valves[valve.id] is None and valve.flow > 0 for valve in valves):
+                yield self.make_next_open(valves)
 
     def __lt__(self, other):
         return self.heuristic() > other.heuristic()
@@ -102,12 +113,12 @@ class GraphExporer:
             if v.flow > 0:
                 self.ordered_valves[v.id] = v.flow
 
-    def nest_path(self, start: Valve, remaining_time):
+    def best_path(self, start: Valve, remaining_time):
         open_list: list[Node] = []
-        closed_list: dict[tuple[int, int, tuple], Node] = {}
+        closed_list: dict[tuple[tuple[int, int], int, tuple], Node] = {}
         open_valves = (None,) * len(self.valves)
         heappush(
-            open_list, Node(start, remaining_time=remaining_time, open_valves=open_valves, closed_valves=self.ordered_valves)
+            open_list, Node((start, start), remaining_time=remaining_time, open_valves=open_valves, closed_valves=self.ordered_valves)
         )
 
         while len(open_list) > 0:
@@ -149,11 +160,11 @@ def parse(filename: str):
 
 starting_valve, valves = parse("input.txt")
 xp = GraphExporer(valves)
-path = xp.nest_path(starting_valve, 30)
+path = xp.best_path(starting_valve, 26)
 for i, step in enumerate(path):
     open_valves = ", ".join(valves[id].ref for id in step.open_valves if id is not None)
     print("=" * 40)
     print("minute:", i)
-    print("valve:", step.valve.ref)
+    print("valves:", [valve.ref for valve in step.valves])
     print("open valves:", open_valves)
     print("pressure:", step.pressure)
