@@ -37,7 +37,10 @@ class Node:
     previous: Optional["Node"] = None
 
     def get_id(self):
-        return ((self.valves[0].id, self.valves[1].id), self.remaining_time, self.open_valves)
+        valve_hum, valve_el = self.valves
+        if valve_hum.id > valve_el.id:
+            valve_hum, valve_el = valve_el, valve_hum
+        return ((valve_hum.id, valve_el.id), self.remaining_time, self.open_valves)
 
     def make_next_move(self, valves: tuple[Valve, Valve]):
         return Node(
@@ -49,19 +52,19 @@ class Node:
             previous=self,
         )
 
-    def make_next_open(self, valves: list[Valve]):
+    def make_next_open(self, valves_to_open: tuple[Valve,...], other: tuple[Valve,...]):
         next_remaining_time = self.remaining_time - 1
         closed_valves = self.closed_valves.copy()
         ids = set()
         next_pressure = self.pressure
-        for valve in valves:
+        for valve in valves_to_open:
             if valve.id in ids:
                 continue
             ids.add(valve.id)
             next_pressure += valve.flow * next_remaining_time
             del closed_valves[valve.id]
         return Node(
-            self.valves,
+            valves_to_open + other,
             remaining_time=next_remaining_time,
             pressure=next_pressure,
             open_valves=tuple(
@@ -83,12 +86,18 @@ class Node:
         return sum
 
     def explore_neighbors(self):
-        neighbors_pairs = product(self.valves[0].neighbors, self.valves[1].neighbors)
-        yield from (self.make_next_move(n) for n in neighbors_pairs)
         valve_hum, valve_el = self.valves
-        for valves in ([valve_hum], [valve_el], [valve_hum, valve_el]):
-            if all(self.open_valves[valve.id] is None and valve.flow > 0 for valve in valves):
-                yield self.make_next_open(valves)
+        neighbors_pairs = product(valve_hum.neighbors, valve_el.neighbors)
+        yield from (self.make_next_move(n) for n in neighbors_pairs)
+        should_open_hum = self.open_valves[valve_hum.id] is None and valve_hum.flow > 0
+        should_open_el = self.open_valves[valve_el.id] is None and valve_el.flow > 0
+        if should_open_hum:
+            yield from (self.make_next_open((valve_hum,), (neighbor_el,)) for neighbor_el in valve_el.neighbors)
+        if should_open_el:
+            yield from (self.make_next_open((valve_el,), (neighbor_hum,)) for neighbor_hum in valve_hum.neighbors)
+        if should_open_hum and should_open_el:
+            yield self.make_next_open((valve_hum, valve_el), ())
+        
 
     def __lt__(self, other):
         return self.heuristic() > other.heuristic()
